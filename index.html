@@ -2,39 +2,98 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<title>AI Debug Evidence Package - Demo</title>
-<style>body{font-family:system-ui;max-width:720px;margin:40px auto;padding:20px}form{display:flex;flex-direction:column;gap:12px}input,textarea,button{padding:12px;font-size:16px}button{background:#0066ff;color:#fff;border:none;cursor:pointer}#log{margin-top:20px;padding:15px;background:#1e1e1e;color:#d4d4d4;white-space:pre-wrap;font-family:monospace;font-size:13px;max-height:400px;overflow:auto}</style>
+<title>AI Debug Evidence Package - 完整测试</title>
+<style>
+body { font-family: system-ui, sans-serif; max-width: 800px; margin: 30px auto; padding: 20px; background: #f8f9fa; }
+h1 { margin-bottom: 8px; }
+.hint { color: #555; margin-bottom: 20px; }
+form { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,.1); display: flex; flex-direction: column; gap: 12px; }
+input, textarea, button { padding: 12px; font-size: 16px; border: 1px solid #ddd; border-radius: 8px; }
+button { background: #0066ff; color: white; border: none; cursor: pointer; font-weight: 600; }
+#log { margin-top: 24px; padding: 16px; background: #1e1e1e; color: #d4d4d4; white-space: pre-wrap; font-family: ui-monospace, monospace; font-size: 13px; border-radius: 8px; max-height: 600px; overflow: auto; }
+.status { margin-top: 12px; font-size: 14px; }
+</style>
 </head>
 <body>
 <h1>AI Debug Evidence Package</h1>
-<p>Fill the form and submit. A failing request will be made, then the evidence package will appear below.</p>
+<p class="hint">填写表单并提交。系统会故意发起失败请求，然后生成完整证据包（密码会被脱敏）。</p>
+
 <form id="test-form">
-<input type="text" name="name" placeholder="Name" required>
-<input type="email" name="email" placeholder="Email" required>
-<textarea name="message" placeholder="Message" rows="3"></textarea>
-<button type="submit">Submit (will fail)</button>
+<input type="text" name="name" placeholder="姓名" required>
+<input type="email" name="email" placeholder="邮箱" required>
+<input type="password" name="password" placeholder="密码（会被脱敏）">
+<textarea name="message" placeholder="消息内容" rows="3"></textarea>
+<button type="submit">提交表单（会失败）</button>
 </form>
-<div id="log">Waiting for submit...</div>
-<script src="https://cdn.jsdelivr.net/npm/esbuild-wasm@0.19.0/esbuild.wasm"></script>
+
+<div class="status" id="status">等待提交...</div>
+<div id="log"></div>
+
 <script>
-// Simplified inline collector for demo
+const SENSITIVE = ['password','passwd','pwd','secret','token','session','otp'];
+function isSensitive(n) { return SENSITIVE.some(s => n.toLowerCase().includes(s)); }
+function redact(v, n) { return isSensitive(n||'') ? '[REDACTED]' : (v||'').slice(0,80); }
+
 const actions = [];
-const networkFailures = [];
+const failures = [];
+
 document.addEventListener('input', e => {
   const t = e.target;
-  if (t.name) actions.push({type:'input', detail:'input '+t.name, value:t.value.slice(0,50), ts:Date.now()});
+  if (!t.name) return;
+  const sel = '[name="'+t.name+'"]';
+  const last = actions[actions.length-1];
+  if (last && last.selector === sel && Date.now()-last.ts < 600) {
+    last.value = redact(t.value, t.name);
+    last.ts = Date.now();
+    return;
+  }
+  actions.push({ type:'input', detail:'输入 '+t.name, selector:sel, value:redact(t.value,t.name), ts:Date.now() });
 });
+
+const origFetch = window.fetch;
+window.fetch = async (...a) => {
+  const start = Date.now();
+  const url = typeof a[0]==='string'?a[0]:a[0].url;
+  const method = (a[1]?.method||'GET').toUpperCase();
+  try {
+    const r = await origFetch(...a);
+    if (!r.ok) failures.push({ method, url, status:r.status, statusText:r.statusText, duration:Date.now()-start });
+    return r;
+  } catch(err) {
+    failures.push({ method, url, status:0, statusText:'Network Error', duration:Date.now()-start });
+    throw err;
+  }
+};
+
 document.getElementById('test-form').addEventListener('submit', e => {
   e.preventDefault();
-  actions.push({type:'submit', detail:'clicked submit', ts:Date.now()});
-  fetch('/api/fail-'+Date.now(), {method:'POST', body:JSON.stringify({x:1})})
-    .catch(()=>{})
-    .finally(()=>{
-      setTimeout(()=>{
-        const md = '# AI Debug Evidence Package\n\n## Info\n- URL: '+location.href+'\n- Failure: Network Error\n\n## Actions\n' + actions.map((a,i)=> (i+1)+'. '+a.type+': '+a.detail).join('\n') + '\n\n## Network\n- POST /api/fail-... (failed)\n\n## Environment\n- Browser: '+navigator.userAgent.split(' ').slice(-2).join(' ');
-        document.getElementById('log').textContent = md;
-      }, 500);
+  document.getElementById('status').textContent = '正在提交并检测失败...';
+  actions.push({ type:'submit', detail:'点击提交', ts:Date.now() });
+
+  fetch('/api/fail-'+Date.now(), { method:'POST', body:'{}' }).catch(()=>{});
+
+  setTimeout(() => {
+    const lines = ['# AI Debug Evidence Package',''];
+    lines.push('## 基本信息');
+    lines.push('- URL: '+location.href);
+    lines.push('- 失败类型: Network Error');
+    lines.push('');
+    lines.push('## 操作序列');
+    actions.slice(-10).forEach((a,i) => {
+      lines.push((i+1)+'. '+a.type.toUpperCase()+': '+a.detail+(a.value?' → '+a.value:''));
     });
+    lines.push('');
+    lines.push('## 失败网络请求');
+    if (failures.length===0) lines.push('无');
+    else failures.slice(-3).forEach(f => lines.push('- '+f.method+' `'+f.url+'` → '+f.status+' '+f.statusText));
+    lines.push('');
+    lines.push('## 环境');
+    lines.push('- Browser: '+navigator.userAgent.split(' ').slice(-2).join(' '));
+
+    document.getElementById('log').textContent = lines.join('\n');
+    document.getElementById('status').textContent = '已生成证据包';
+    document.getElementById('status').style.color = '#0a0';
+  }, 800);
 });
 </script>
 </body>
