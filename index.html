@@ -1,2 +1,41 @@
 <!DOCTYPE html>
-<html><body><h1>Demo placeholder - full file will be uploaded</h1><p>See demo.html in artifacts.</p></body></html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>AI Debug Evidence Package - Demo</title>
+<style>body{font-family:system-ui;max-width:720px;margin:40px auto;padding:20px}form{display:flex;flex-direction:column;gap:12px}input,textarea,button{padding:12px;font-size:16px}button{background:#0066ff;color:#fff;border:none;cursor:pointer}#log{margin-top:20px;padding:15px;background:#1e1e1e;color:#d4d4d4;white-space:pre-wrap;font-family:monospace;font-size:13px;max-height:400px;overflow:auto}</style>
+</head>
+<body>
+<h1>AI Debug Evidence Package</h1>
+<p>Fill the form and submit. A failing request will be made, then the evidence package will appear below.</p>
+<form id="test-form">
+<input type="text" name="name" placeholder="Name" required>
+<input type="email" name="email" placeholder="Email" required>
+<textarea name="message" placeholder="Message" rows="3"></textarea>
+<button type="submit">Submit (will fail)</button>
+</form>
+<div id="log">Waiting for submit...</div>
+<script src="https://cdn.jsdelivr.net/npm/esbuild-wasm@0.19.0/esbuild.wasm"></script>
+<script>
+// Simplified inline collector for demo
+const actions = [];
+const networkFailures = [];
+document.addEventListener('input', e => {
+  const t = e.target;
+  if (t.name) actions.push({type:'input', detail:'input '+t.name, value:t.value.slice(0,50), ts:Date.now()});
+});
+document.getElementById('test-form').addEventListener('submit', e => {
+  e.preventDefault();
+  actions.push({type:'submit', detail:'clicked submit', ts:Date.now()});
+  fetch('/api/fail-'+Date.now(), {method:'POST', body:JSON.stringify({x:1})})
+    .catch(()=>{})
+    .finally(()=>{
+      setTimeout(()=>{
+        const md = '# AI Debug Evidence Package\n\n## Info\n- URL: '+location.href+'\n- Failure: Network Error\n\n## Actions\n' + actions.map((a,i)=> (i+1)+'. '+a.type+': '+a.detail).join('\n') + '\n\n## Network\n- POST /api/fail-... (failed)\n\n## Environment\n- Browser: '+navigator.userAgent.split(' ').slice(-2).join(' ');
+        document.getElementById('log').textContent = md;
+      }, 500);
+    });
+});
+</script>
+</body>
+</html>
